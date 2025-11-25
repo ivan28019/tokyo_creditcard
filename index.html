@@ -1,0 +1,504 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日本刷卡攻略計算機 🇯🇵</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0fdf4; }
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* 自定義捲軸 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- v11 參數設定 ---
+        const RATE = 0.205; // 匯率
+        const KUMAMON_CAP_TWD = 8333; // 熊本熊指定通路月上限
+        const FEE_RATE = 0.015; // 國外交易手續費 1.5%
+        const SUICA_LIMIT_JPY = 20000; // 西瓜卡儲值上限
+
+        // PayPay: 全支付參數
+        const PX_BASE_RATE = 0.035;         
+        const PX_BASE_TXN_LIMIT = 857;      
+        const PX_CATHAY_RATE = 0.05;        
+        const PX_CATHAY_TXN_LIMIT = 1000;   
+        
+        // PayPay: 玉山 Wallet 參數
+        const ESUN_WALLET_RATE = 0.035;       
+        
+        // 通路資料庫
+        const STORES = [
+            { id: 'matsukiyo', name: '松本清 (Matsumoto Kiyoshi)', category: 'drugstore', designated: true, master_threshold: 20000, master_reward_rate: 0.133, master_gift: 2000 },
+            { id: 'daikoku', name: '大國藥妝 (Daikoku)', category: 'drugstore', designated: true },
+            { id: 'donki', name: '唐吉訶德 (Donki)', category: 'electronics', designated: true, master_threshold: 10000, master_reward_rate: 0.133, master_gift: 1000 },
+            { id: 'bic', name: 'Bic Camera', category: 'electronics', designated: true, master_threshold: 30000, master_reward_rate: 0.10, master_gift: 2000 },
+            { id: 'yodobashi', name: 'Yodobashi Camera', category: 'electronics', designated: true },
+            { id: 'edion', name: '愛電王 (EDION)', category: 'electronics', designated: false, master_threshold: 30000, master_reward_rate: 0.083, master_gift: 1500 },
+            { id: 'odakyu', name: '新宿小田急百貨', category: 'dept', designated: false, master_threshold: 30000, master_reward_rate: 0.133, master_gift: 3000 },
+            { id: 'muji', name: '無印良品 / niko and... / 3 coins', category: 'dept', designated: true },
+            { id: '711', name: '7-Eleven', category: 'convenience', designated: false, suica: true, master_threshold: 1500, master_reward_rate: 0.133, master_gift: 150 },
+            { id: 'lawson_family', name: '全家 / Lawson', category: 'convenience', designated: false, suica: true },
+            { id: 'designated_food', name: '指定餐飲 (DOUTOR Coffee/Fuglen/松屋/勝烈亭/壽司郎/敘敘苑/牛角/Sukiya/shake shack)', category: 'food', designated: true },
+            { id: 'general_food_ic', name: '一般餐廳 (可刷 IC 卡)', category: 'food', designated: false, suica: true },
+            { id: 'general_food_card', name: '一般餐廳 (僅收信用卡)', category: 'food', designated: false, suica: false },
+            { id: 'jr_jal', name: 'JR鐵路 / 日本航空', category: 'transport', designated: true },
+            { id: 'general_transport', name: '地鐵 / 公車 / 私鐵', category: 'transport', designated: false, suica: true },
+            { id: 'paypay', name: 'PayPay (掃碼支付)', category: 'paypay', designated: false },
+            { id: 'other_ic', name: '其他 (可刷西瓜卡)', category: 'other', designated: false, suica: true },
+            { id: 'other_card', name: '其他 (不可西瓜卡)', category: 'other', designated: false, suica: false },
+        ];
+
+        const CATEGORIES = {
+            drugstore: '💊 藥妝店',
+            electronics: '📷 電器/3C',
+            dept: '🛍️ 百貨/雜貨',
+            convenience: '🏪 便利商店',
+            food: '🍜 餐飲美食',
+            transport: '🚅 交通移動',
+            paypay: '📱 PayPay (掃碼)',
+            other: '📦 其他場域'
+        };
+
+        const App = () => {
+            const [selectedStoreId, setSelectedStoreId] = useState('');
+            const [amountJpy, setAmountJpy] = useState('');
+            const [kumamonUsedTwd, setKumamonUsedTwd] = useState('');
+            const [result, setResult] = useState(null);
+
+            useEffect(() => {
+                if (!selectedStoreId || !amountJpy) {
+                    setResult(null);
+                    return;
+                }
+
+                const store = STORES.find(s => s.id === selectedStoreId);
+                const amount = parseInt(amountJpy, 10);
+                const usedTwd = parseInt(kumamonUsedTwd || 0, 10);
+                const currentTwd = Math.round(amount * RATE); 
+                const remainingKumamonCap = Math.max(0, KUMAMON_CAP_TWD - usedTwd);
+                const willBustKumamonCap = currentTwd > remainingKumamonCap;
+                const isSuicaOverLimit = amount > SUICA_LIMIT_JPY;
+
+                let rec = {}; 
+                let rec2 = null; 
+                let finalRewardAmount = 0;
+
+                const feeTwd = Math.round(currentTwd * FEE_RATE);
+
+                // --- Helper: Options Generators (含代表色設定) ---
+                
+                // 1. DAWAY (永豐深紅)
+                const dawayGross = Math.round(currentTwd * 0.035);
+                const dawayNet = dawayGross - feeTwd;
+                const dawayOption = {
+                    method: '永豐 DAWAY 卡',
+                    rate: '3.5%',           
+                    netRate: '淨利 2%',     
+                    note: '無腦刷 3.5% 無上限 (已扣除 1.5% 手續費)。',
+                    rewardAmount: dawayNet,
+                    color: 'bg-red-900', // 永豐深紅
+                    text: 'text-white',
+                    breakdown: [
+                        { label: 'DAWAY 回饋', amt: dawayGross, note: '(3.5%)' },
+                        { label: '國外手續費', amt: -feeTwd, note: '(1.5%)' }
+                    ]
+                };
+
+                // 2. Richart (台新紅)
+                const richartGross = Math.round(currentTwd * 0.033);
+                const richartNet = richartGross - feeTwd;
+                const richartOption = {
+                    method: '台新 Richart (Master)',
+                    rate: '3.3%',
+                    netRate: '淨利 1.8%',
+                    note: 'Mastercard 3.3% 無上限 (已扣除 1.5% 手續費)。',
+                    rewardAmount: richartNet,
+                    color: 'bg-red-600', // 台新紅
+                    text: 'text-white',
+                    breakdown: [
+                        { label: 'Richart 回饋', amt: richartGross, note: '(3.3%)' },
+                        { label: '國外手續費', amt: -feeTwd, note: '(1.5%)' }
+                    ]
+                };
+
+                // 3. Kumamon (玉山綠)
+                const kumamonRewardGross = willBustKumamonCap 
+                    ? Math.round(currentTwd * 0.025) 
+                    : Math.round(currentTwd * 0.085);
+                const kumamonNet = kumamonRewardGross - feeTwd;
+                const kumamonOption = {
+                    method: store.designated ? '玉山 熊本熊卡' : 'Suica (熊本熊儲值)',
+                    rate: willBustKumamonCap ? '2.5%' : '8.5%',
+                    netRate: willBustKumamonCap ? '淨利 1%' : '淨利 7%',
+                    note: willBustKumamonCap ? '額度已滿，享一般回饋 2.5% (扣手續費後淨賺 1%)。' : '指定通路/Suica 享 8.5% (已扣除 1.5% 手續費)。',
+                    rewardAmount: kumamonNet,
+                    color: 'bg-emerald-600', // 玉山綠
+                    text: 'text-white',
+                    breakdown: [
+                        { label: '熊本熊回饋', amt: kumamonRewardGross, note: willBustKumamonCap ? '(2.5%)' : '(8.5%)' },
+                        { label: '國外手續費', amt: -feeTwd, note: '(1.5%)' }
+                    ]
+                };
+
+                // Logic 1: PayPay
+                if (store.category === 'paypay') {
+                    const pxBaseValid = Math.min(currentTwd, PX_BASE_TXN_LIMIT);
+                    const pxCathayValid = Math.min(currentTwd, PX_CATHAY_TXN_LIMIT);
+                    const pxCathayTotal = Math.floor(pxBaseValid * PX_BASE_RATE) + Math.floor(pxCathayValid * PX_CATHAY_RATE);
+                    const esunTotal = Math.floor(currentTwd * ESUN_WALLET_RATE); 
+
+                    if (currentTwd < 1000) {
+                        finalRewardAmount = pxCathayTotal;
+                        const realRate = (finalRewardAmount / currentTwd * 100).toFixed(1);
+                        rec = {
+                            method: '全支付 (綁國泰帳戶)',
+                            rate: `約 ${realRate}%`,
+                            note: '金額 < 1000，全支付回饋率最高。',
+                            color: 'bg-yellow-500', // 全支付黃
+                            text: 'text-gray-900',  // 深色文字
+                            badge: '小額首選',
+                            rewardAmount: finalRewardAmount,
+                            breakdown: [
+                                { label: '全支付一般 (3.5%)', amt: Math.floor(pxBaseValid * PX_BASE_RATE), note: '' },
+                                { label: '國泰帳戶 (5%)', amt: Math.floor(pxCathayValid * PX_CATHAY_RATE), note: '' }
+                            ]
+                        };
+                        rec2 = {
+                            method: '玉山 Wallet',
+                            rate: '3.5%',
+                            note: 'Plan B，免手續費。',
+                            rewardAmount: esunTotal
+                        };
+                    } else if (currentTwd < 2857) {
+                        finalRewardAmount = esunTotal;
+                        rec = {
+                            method: '玉山 Wallet (熊本熊卡)',
+                            rate: '3.5%',
+                            note: '金額 1000~2857 推薦玉山 Wallet (免手續費)。',
+                            color: 'bg-emerald-600', // 玉山綠
+                            text: 'text-white',
+                            badge: '中額推薦',
+                            rewardAmount: finalRewardAmount
+                        };
+                        const realRate = (pxCathayTotal / currentTwd * 100).toFixed(1);
+                        rec2 = {
+                            method: '全支付 (綁國泰)',
+                            rate: `約 ${realRate}%`,
+                            note: '超過單筆上限，回饋被稀釋。',
+                            rewardAmount: pxCathayTotal
+                        };
+                    } else {
+                        if (!willBustKumamonCap) {
+                            rec = { ...kumamonOption, badge: '轉用卡片' };
+                            rec2 = dawayOption;
+                        } else {
+                            rec = { ...dawayOption, badge: '轉用卡片' };
+                            rec2 = richartOption;
+                        }
+                    }
+                    setResult({...rec, second: rec2});
+                    return;
+                }
+
+                // Logic 2: Master Threshold
+                if (store.master_threshold && amount >= store.master_threshold) {
+                    const giftValTwd = Math.round(store.master_gift * RATE);
+                    finalRewardAmount = richartNet + giftValTwd;
+
+                    let masterRateText = "10%";
+                    if (store.master_reward_rate > 0.12) masterRateText = "10%";
+                    else if (store.master_reward_rate > 0.09) masterRateText = "6.7%";
+                    else masterRateText = "5%";
+
+                    rec = {
+                        method: '台新 Richart (Mastercard)',
+                        rate: `Master ${masterRateText} + Richart 3.3%`,
+                        note: `已達 Master 贈 ${store.master_gift} 日圓門檻！(已扣除手續費)`,
+                        color: 'bg-red-600', // 台新紅
+                        text: 'text-white',
+                        subNote: '需下載優惠券',
+                        rewardAmount: finalRewardAmount,
+                        breakdown: [
+                            { label: 'Master 贈禮', amt: giftValTwd, note: `(¥${store.master_gift})` },
+                            { label: 'Richart 回饋', amt: richartGross, note: '(3.3%)' },
+                            { label: '國外手續費', amt: -feeTwd, note: '(1.5%)' }
+                        ]
+                    };
+
+                    if (store.designated && !willBustKumamonCap) {
+                        rec2 = { ...kumamonOption, note: '若忘記帶優惠券，刷這張淨賺 7%。' };
+                    } else {
+                        rec2 = dawayOption;
+                    }
+                    setResult({...rec, second: rec2});
+                    return;
+                }
+
+                // Logic 3: Kumamon / Suica
+                const isKumamonDirect = store.designated;
+                const isSuica = store.suica;
+                if (isKumamonDirect || isSuica) {
+                    const validSuica = isSuica && !isSuicaOverLimit;
+                    if (isKumamonDirect || validSuica) {
+                        if (!willBustKumamonCap) {
+                            const methodName = isKumamonDirect ? '玉山 熊本熊卡 (直接刷)' : 'Suica 西瓜卡 (熊本熊儲值)';
+                            rec = {
+                                ...kumamonOption,
+                                method: methodName,
+                            };
+                            rec2 = dawayOption;
+                        } else {
+                            rec = { ...dawayOption, note: `⚠️ 熊本熊額度不足！淨利剩 1% (低於 DAWAY)。` };
+                            rec2 = kumamonOption; 
+                        }
+                    } else {
+                         rec = { ...dawayOption, note: `⚠️ 金額超過西瓜卡上限 (2萬日圓)！建議直接刷 DAWAY。` };
+                         rec2 = richartOption;
+                    }
+                    setResult({...rec, second: rec2});
+                    return;
+                }
+
+                // Logic 4: General
+                rec = { ...dawayOption };
+                rec2 = richartOption;
+                setResult({...rec, second: rec2});
+
+            }, [selectedStoreId, amountJpy, kumamonUsedTwd]);
+
+            return (
+                <div className="min-h-screen bg-emerald-50 pb-10">
+                    {/* Header: Full width */}
+                    <div className="bg-emerald-900 text-white p-6 shadow-xl relative overflow-hidden mb-6">
+                        <div className="max-w-5xl mx-auto flex flex-col md:flex-row md:items-end justify-between relative z-10">
+                            <div>
+                                <h1 className="text-3xl font-bold mb-1 flex items-center">
+                                    <span>🇯🇵 日本刷卡攻略</span>
+                                </h1>
+                                <p className="text-emerald-200 text-sm">電腦/手機雙用版 📱💻</p>
+                            </div>
+                            <div className="mt-4 md:mt-0 flex gap-3 text-xs">
+                                <span className="bg-emerald-800 px-3 py-1.5 rounded-full border border-emerald-700">匯率 {RATE}</span>
+                                <span className="bg-emerald-800 px-3 py-1.5 rounded-full border border-emerald-700">自動扣 1.5% 手續費</span>
+                            </div>
+                        </div>
+                        {/* Decor */}
+                        <div className="absolute -right-10 -top-10 w-40 h-40 bg-yellow-400 rounded-full opacity-10 blur-2xl"></div>
+                    </div>
+
+                    {/* Main Content: Responsive Grid */}
+                    <div className="max-w-5xl mx-auto px-4 md:px-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                            
+                            {/* Left Column: Inputs */}
+                            <div className="space-y-4">
+                                {/* 1. Store */}
+                                <div className="bg-white p-5 rounded-2xl card-shadow border border-emerald-100">
+                                    <label className="block text-gray-700 font-bold mb-3 flex items-center text-lg">
+                                        <span className="bg-emerald-100 text-emerald-800 w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3">1</span>
+                                        消費場域
+                                    </label>
+                                    <div className="relative">
+                                        <select 
+                                            className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 appearance-none text-gray-700 text-base"
+                                            value={selectedStoreId}
+                                            onChange={(e) => setSelectedStoreId(e.target.value)}
+                                        >
+                                            <option value="">請選擇...</option>
+                                            {Object.keys(CATEGORIES).map(catKey => (
+                                                <optgroup key={catKey} label={CATEGORIES[catKey]}>
+                                                    {STORES.filter(s => s.category === catKey).map(store => (
+                                                        <option key={store.id} value={store.id}>{store.name}</option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+                                        <div className="absolute right-4 top-4 text-gray-400 pointer-events-none">
+                                            <i className="fas fa-chevron-down"></i>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 2. Amount */}
+                                <div className="bg-white p-5 rounded-2xl card-shadow border border-emerald-100">
+                                    <label className="block text-gray-700 font-bold mb-3 flex items-center text-lg">
+                                        <span className="bg-emerald-100 text-emerald-800 w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3">2</span>
+                                        消費日圓 (¥)
+                                    </label>
+                                    <div className="relative">
+                                        <span className="absolute left-4 top-4 text-gray-400 text-lg">¥</span>
+                                        <input 
+                                            type="number" 
+                                            inputMode="numeric" 
+                                            className="w-full pl-10 p-4 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xl font-mono"
+                                            placeholder="例如: 5000"
+                                            value={amountJpy}
+                                            onChange={(e) => setAmountJpy(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* 3. Cap Monitor */}
+                                <div className="bg-white p-5 rounded-2xl card-shadow border border-emerald-100">
+                                    <label className="flex items-center justify-between text-gray-600 text-sm font-semibold mb-3">
+                                        <span className="flex items-center"><i className="fas fa-chart-pie mr-2 text-gray-400"></i>熊本熊卡已刷 (台幣)</span>
+                                        <span className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-500">上限 $8,333</span>
+                                    </label>
+                                    <input 
+                                        type="number" 
+                                        inputMode="numeric" 
+                                        className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-400 text-sm placeholder-gray-300"
+                                        placeholder="本月已累積消費 (選填)"
+                                        value={kumamonUsedTwd}
+                                        onChange={(e) => setKumamonUsedTwd(e.target.value)}
+                                    />
+                                    <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                        <div 
+                                            className={`h-full transition-all duration-500 ${parseInt(kumamonUsedTwd) > KUMAMON_CAP_TWD ? 'bg-red-500' : 'bg-emerald-500'}`} 
+                                            style={{width: `${Math.min((parseInt(kumamonUsedTwd || 0)/KUMAMON_CAP_TWD)*100, 100)}%`}}
+                                        ></div>
+                                    </div>
+                                </div>
+
+                                {/* Footer Info */}
+                                <div className="hidden md:block p-4 bg-white rounded-xl border border-gray-200 text-xs text-gray-500 space-y-2">
+                                    <h3 className="font-bold text-gray-700 mb-1">📢 PayPay 攻略</h3>
+                                    <ul className="list-disc pl-4 space-y-1">
+                                        <li><strong>&lt; 1000 元：</strong>全支付 (約8.5%)。</li>
+                                        <li><strong>1000 ~ 2857 元：</strong>玉山 Wallet (熊本熊)。</li>
+                                        <li><strong>&gt; 2857 元：</strong>直接刷卡。</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            {/* Right Column: Results */}
+                            <div>
+                                {result ? (
+                                    <div className={`transform transition-all duration-500 translate-y-0 opacity-100 animate-fade-in`}>
+                                        
+                                        {/* Plan A */}
+                                        <div className={`${result.color} ${result.text || 'text-white'} rounded-2xl shadow-xl overflow-hidden relative z-10`}>
+                                            {result.badge && (
+                                                <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-1 rounded-bl-xl shadow-sm">
+                                                    {result.badge}
+                                                </div>
+                                            )}
+                                            
+                                            <div className="p-6 pb-8">
+                                                <div className="uppercase tracking-wide text-xs font-bold opacity-80 mb-2 flex items-center">
+                                                    <i className="fas fa-crown mr-2"></i> 最佳推薦 (Plan A)
+                                                </div>
+                                                <h2 className="text-3xl font-bold mb-2">{result.method}</h2>
+                                                
+                                                {/* 🌟 視覺優化區塊: 回饋率與淨利拆分 */}
+                                                <div className="text-2xl font-bold opacity-90 mb-6">
+                                                    {result.rate} <span className="text-sm font-normal opacity-70">回饋率</span>
+                                                    {result.netRate && (
+                                                        <div className="text-sm font-normal mt-1 opacity-80">
+                                                            ({result.netRate})
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                
+                                                <div className={`mb-6 p-4 rounded-xl backdrop-blur-sm border ${result.text === 'text-gray-900' ? 'bg-black/5 border-black/10' : 'bg-black/20 border-white/10'}`}>
+                                                    <div className={`flex justify-between items-center mb-2 border-b pb-2 ${result.text === 'text-gray-900' ? 'border-black/10' : 'border-white/10'}`}>
+                                                        <span className="text-sm font-bold opacity-80">預估淨回饋</span>
+                                                        <span className={`text-2xl font-mono font-bold ${result.text === 'text-gray-900' ? 'text-emerald-700' : 'text-yellow-300'}`}>NT$ {result.rewardAmount.toLocaleString()}</span>
+                                                    </div>
+                                                    {result.breakdown && (
+                                                        <div className="space-y-1.5 pt-2">
+                                                            {result.breakdown.map((item, idx) => (
+                                                                <div key={idx} className="flex justify-between text-xs opacity-90 font-mono">
+                                                                    <span>• {item.label} {item.note}</span>
+                                                                    <span className={item.amt < 0 ? (result.text === 'text-gray-900' ? 'text-red-600' : 'text-red-300') : ''}>{item.amt > 0 ? '+' : ''}${item.amt.toLocaleString()}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <p className="text-base leading-relaxed opacity-90">
+                                                    {result.note}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Plan B */}
+                                        {result.second && (
+                                            <div className="mx-3 -mt-4 pt-8 pb-4 px-6 bg-white rounded-b-xl shadow-lg border-x border-b border-gray-200 relative z-0">
+                                                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 flex items-center">
+                                                    <i className="fas fa-random mr-2"></i> 第二順位 (Plan B)
+                                                </div>
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <div className="text-gray-800 font-bold text-lg">{result.second.method}</div>
+                                                        <div className="text-gray-500 text-sm mt-1">{result.second.note}</div>
+                                                    </div>
+                                                    <div className="text-right pl-4">
+                                                        <div className="text-emerald-600 font-bold text-lg">{result.second.rate}</div>
+                                                        {result.second.netRate && (
+                                                            <div className="text-gray-400 text-xs mt-0.5 font-bold">({result.second.netRate})</div>
+                                                        )}
+                                                        <div className="text-gray-400 text-sm font-mono mt-0.5">NT$ {result.second.rewardAmount.toLocaleString()}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {/* Estimation Info */}
+                                        <div className="mt-4 text-center">
+                                            <span className="text-xs text-gray-400 bg-gray-100 px-3 py-1.5 rounded-full">
+                                                預估總額: NT$ {Math.round(amountJpy * RATE).toLocaleString()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    /* Empty State */
+                                    <div className="hidden md:flex h-full items-center justify-center text-gray-300 border-2 border-dashed border-gray-200 rounded-2xl min-h-[400px]">
+                                        <div className="text-center">
+                                            <i className="fas fa-calculator text-4xl mb-4"></i>
+                                            <p>請在左側輸入資料</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Mobile Footer Info */}
+                            <div className="md:hidden px-1 mt-2 text-xs text-gray-500 space-y-2">
+                                <div className="p-3 bg-white rounded-xl border border-gray-200">
+                                    <h3 className="font-bold text-gray-700 mb-1">📢 PayPay 攻略</h3>
+                                    <ul className="list-disc pl-4 space-y-1">
+                                        <li><strong>&lt; 1000 元：</strong>全支付 (約8.5%)。</li>
+                                        <li><strong>1000 ~ 2857 元：</strong>玉山 Wallet (熊本熊)。</li>
+                                        <li><strong>&gt; 2857 元：</strong>直接刷卡。</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
