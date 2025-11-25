@@ -390,9 +390,10 @@
                                 <h1 className="text-3xl font-bold mb-1 flex items-center">
                                     <span>🇯🇵 日本刷卡攻略</span>
                                 </h1>
-                                <p className="text-emerald-200 text-sm">電腦/手機雙用版 📱💻</p>
+                                
+                                
                             </div>
-                            <div className="mt-4 md:mt-0 flex gap-3 text-xs items-center">
+                            <div className="mt-4 md:mt-0 flex gap-3 text-xs items-left flex-col md:flex-row">
                                 <div className="flex items-center gap-2">
                                     <div className="bg-emerald-900 px-3 py-1.5 rounded-full border border-emerald-700 flex items-center gap-2" title="雙擊可手動輸入匯率" onDoubleClick={() => { setIsEditingRate(true); setManualRateInput(formatRateDisplay(rate)); setManualRateError(''); setTimeout(() => rateInputRef?.current?.focus?.(), 10); }} onKeyDown={(e) => { if (e.key === 'Enter') { setIsEditingRate(true); setManualRateInput(formatRateDisplay(rate)); setManualRateError(''); setTimeout(() => rateInputRef?.current?.focus?.(), 10); } }} tabIndex={0} role="button">
                                         {!isEditingRate ? (
@@ -432,7 +433,7 @@
                                     </div>
                                     <button type="button" onClick={() => { setIsManualRate(false); fetchRate({force: true}); }} className="text-white/90 bg-white/10 hover:bg-white/20 rounded px-2 py-1 text-xs focus-ring">{rateLoading ? '更新中...' : '刷新'}</button>
                                 </div>
-                                <span className="bg-emerald-800 px-3 py-1.5 rounded-full border border-emerald-700">自動扣 1.5% 手續費</span>
+                                
                                 {rateLastUpdated && (
                                     <span className="text-emerald-200 ml-2 text-xs">更新: {rateLastUpdated.toLocaleTimeString()}</span>
                                 )}
